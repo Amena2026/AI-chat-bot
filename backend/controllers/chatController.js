@@ -1,26 +1,18 @@
 const { db } = require('../config/firebase-admin');
-const OpenAI = require('openai');
+const axios = require('axios');
 
-const openai = new OpenAI({
-  apiKey: process.env.OPENAI_API_KEY
-});
-
-// allows a user to send a message, save that message to the database, pass that message to a LLM, and then 
-// saves the AI message to the database 
 exports.sendMessage = async (req, res) => {
   try {
+    const { sessionId, message } = req.body;
+    const userId = req.user.uid;
 
-    // first extract data from the request
-    const { sessionId, message } = req.body; // the body of the request ie the user information
-    const userId = req.user.uid;             // user information from the verified token
-
-    // Verifies that the session belongs to this user
+    // Verify session belongs to user
     const sessionSnapshot = await db.ref(`sessions/${userId}/${sessionId}`).once('value');
     if (!sessionSnapshot.exists()) {
       return res.status(404).json({ error: 'Session not found' });
     }
 
-    // Saves the user's message to the Firebase real time database 
+    // Save user message to Firebase
     const userMessageRef = db.ref(`messages/${sessionId}`).push();
     await userMessageRef.set({
       role: 'user',
@@ -28,28 +20,47 @@ exports.sendMessage = async (req, res) => {
       timestamp: Date.now()
     });
 
-    // get all of the previous messages for this context so that the LLM knows the full conversation
-    // history for this particular session
+    // Get conversation history
     const messagesSnapshot = await db.ref(`messages/${sessionId}`).once('value');
-    const messages = [];
+    const conversationHistory = [];
+    
     messagesSnapshot.forEach((child) => {
       const msg = child.val();
-      messages.push({
-        role: msg.role,
-        content: msg.content
+      conversationHistory.push({
+        role: msg.role === 'user' ? 'user' : 'model',
+        parts: [{ text: msg.content }]
       });
     });
 
-    // Call OpenAI API
-    const completion = await openai.chat.completions.create({
-      model: "gpt-3.5-turbo",
-      messages: messages, // full conversation history
+    // Call Gemini API
+    const apiKey = process.env.GEMINI_API_KEY;
+    const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${apiKey}`;
+
+    const contents = conversationHistory.map(msg => ({
+      role: msg.role,
+      parts: msg.parts
+    }));
+
+    console.log('Calling Gemini 2.5 Flash...');
+    
+    const geminiResponse = await axios.post(url, {
+      contents: contents,
+      generationConfig: {
+        temperature: 0.7,
+        topK: 40,
+        topP: 0.95,
+        maxOutputTokens: 1024,
+      }
+    }, {
+      headers: {
+        'Content-Type': 'application/json'
+      }
     });
 
-    // store the AI response in this variable 
-    const aiResponse = completion.choices[0].message.content;
+    const aiResponse = geminiResponse.data.candidates[0].content.parts[0].text;
+    console.log('✅ Gemini API responded successfully');
 
-    // Save AI response to database
+    // Save AI response to Firebase
     const aiMessageRef = db.ref(`messages/${sessionId}`).push();
     await aiMessageRef.set({
       role: 'assistant',
@@ -57,41 +68,41 @@ exports.sendMessage = async (req, res) => {
       timestamp: Date.now()
     });
 
-    // Update session's last message timestamp
+    // Update session timestamp
     await db.ref(`sessions/${userId}/${sessionId}`).update({
       lastMessageAt: Date.now()
     });
-    // send the response back to react 
+
     res.json({
       success: true,
       message: aiResponse
     });
 
   } catch (error) {
-    console.error('Error sending message:', error);
-    res.status(500).json({ error: 'Failed to send message' });
+    console.error('Error sending message:', error.response?.data || error.message);
+    res.status(500).json({ 
+      success: false,
+      error: 'Failed to send message',
+      details: error.response?.data || error.message
+    });
   }
 };
 
-// Create a new chat session
+// Keep all other functions the same (createSession, getSessions, getMessages, deleteSession)
 exports.createSession = async (req, res) => {
   try {
-
-    const userId = req.user.uid; // grab user id 
+    const userId = req.user.uid;
     const { title } = req.body;
 
-    // generate a new unique session ID so that the user can reference this session again in the future
     const sessionRef = db.ref(`sessions/${userId}`).push();
-    const sessionId = sessionRef.key; // auto generated session ID
+    const sessionId = sessionRef.key;
 
-    // save the session to firebase 
     await sessionRef.set({
       title: title || 'New Chat',
       createdAt: Date.now(),
       lastMessageAt: Date.now()
     });
 
-    // send the session info back to react 
     res.json({
       success: true,
       sessionId: sessionId,
@@ -107,17 +118,12 @@ exports.createSession = async (req, res) => {
   }
 };
 
-// getSessions loads chat history
 exports.getSessions = async (req, res) => {
   try {
     const userId = req.user.uid;
-
-    // gets all of the user sessions and returns a snapshot (ie like a picture of all the users current sessions)
     const sessionsSnapshot = await db.ref(`sessions/${userId}`).once('value');
     const sessions = {};
 
-    // loops through every session in our snapshot, builds a session object that contains info on all of the users sessions
-    // we can then use this to display a sidebar list of chats, sort by most recent, last etc
     sessionsSnapshot.forEach((child) => {
       sessions[child.key] = child.val();
     });
@@ -133,25 +139,19 @@ exports.getSessions = async (req, res) => {
   }
 };
 
-// Get messages for a specific session
 exports.getMessages = async (req, res) => {
   try {
     const { sessionId } = req.params;
     const userId = req.user.uid;
 
-    // Verify session belongs to user
-    // if a user tries to accesss someone elses sesssion it will fail
     const sessionSnapshot = await db.ref(`sessions/${userId}/${sessionId}`).once('value');
     if (!sessionSnapshot.exists()) {
       return res.status(404).json({ error: 'Session not found' });
     }
 
-    // read all messages for this specific snapshot 
     const messagesSnapshot = await db.ref(`messages/${sessionId}`).once('value');
     const messages = {};
 
-    // loop through every message in our message snapshot and build a message object containing all messages for 
-    // this particular session
     messagesSnapshot.forEach((child) => {
       messages[child.key] = child.val();
     });
@@ -167,19 +167,13 @@ exports.getMessages = async (req, res) => {
   }
 };
 
-// Delete a session
 exports.deleteSession = async (req, res) => {
   try {
     const { sessionId } = req.params;
     const userId = req.user.uid;
 
-    // Delete the session  from /sessions/userId/sessionId
-    await db.ref(`sessions/${userId}/${sessionId}`).remove(); // .remove is a firebase method to delete data at specified path
-    // Delete all messages from /messages/sessionId
+    await db.ref(`sessions/${userId}/${sessionId}`).remove();
     await db.ref(`messages/${sessionId}`).remove();
-
-    // if a user tries to delete at a session that doesnt belong to him it wont work, or if they try to delete a session
-    // that doesnt exist it wont work either
     
     res.json({
       success: true,
