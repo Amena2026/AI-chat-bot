@@ -1,10 +1,11 @@
 const admin = require('firebase-admin');
+
 let serviceAccount;
 
-if (process.env.SERVICE_ACCOUNT_BASE64) {
-  // Production: Decode from base64
-  const serviceAccountJson = Buffer.from(process.env.SERVICE_ACCOUNT_BASE64, 'base64').toString('utf8');
-  serviceAccount = JSON.parse(serviceAccountJson);
+// Check if running in production (Render) or local
+if (process.env.SERVICE_ACCOUNT_JSON) {
+  // Production: Use environment variable
+  serviceAccount = JSON.parse(process.env.SERVICE_ACCOUNT_JSON);
 } else {
   // Local development: Use file
   serviceAccount = require('../serviceAccountKey.json');

@@ -2,7 +2,7 @@ import axios from 'axios';
 import { getUserToken } from './authService';
 
 // Your backend URL
-const API_URL = 'http://localhost:5000/api/chat';
+const API_URL = 'https://ai-chat-bot-backend-gb78.onrender.com/api/chat';
 
 // Create axios instance with auth interceptor
 const apiClient = axios.create({

@@ -9,7 +9,15 @@ const chatRoutes = require('./routes/chat');
 const app = express(); // creates an express app
 
 // Middleware
-app.use(cors());
+const corsOptions = {
+  origin: [
+    'http://localhost:3000',
+    'https://ai-chatbot-13281.web.app',
+    'https://ai-chatbot-13281.firebaseapp.com'
+  ],
+  credentials: true
+};
+app.use(cors(corsOptions));
 app.use(express.json()); // parses json data in to JavaScript objects 
 
 // any url starting with /api/chat should be handled by the chatRoutes file
